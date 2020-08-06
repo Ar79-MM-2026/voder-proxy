@@ -10,6 +10,7 @@ use futures::future::{self, Future};
 use futures::future::Map;
 use futures::future::MapErr;
 use hyper::client::Client;
+use hyper::error::Error as HyperError;
 use hyper::header::HeaderValue;
 use hyper::http::header::HeaderName;
 use hyper::rt::Stream;
@@ -169,9 +170,10 @@ fn speak_proxy(
   let client = Client::new();
 
   let fut = client
-    .get(Uri::from_static("http://httpbin.org/ip"))
+    //.get(Uri::from_static("http://httpbin.org/ip"))
+    .get(Uri::from_static("http://asdfahsfahshfajshdfasf.com/ip"))
     .and_then(|res| {
-      println!("status: {}", res.status());
+      info!("status: {}", res.status());
       // Concatenate the body stream into a single buffer...
       // This returns a new future, since we must stream body.
       res.into_body().concat2()
@@ -191,10 +193,12 @@ fn speak_proxy(
       Ok(r)
     })
 
-    // Map any errors that might have happened...
-    /*.map_err(|err| {
+    .or_else(|err| {
       println!("error: {}", err);
-    })*/
+      let b = Body::from("test".to_string());
+      let r = Response::new(b);
+      Ok(r)
+    })
     ;
 
 
