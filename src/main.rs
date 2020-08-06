@@ -7,13 +7,16 @@ pub mod newrelic_logger;
 use anyhow::Result as AnyhowResult;
 use crate::newrelic_logger::{NewRelicLogger, MaybeNewRelicTransaction};
 use futures::future::{self, Future};
-use hyper::Method;
+use futures::future::Map;
+use futures::future::MapErr;
+use hyper::client::Client;
 use hyper::header::HeaderValue;
 use hyper::http::header::HeaderName;
 use hyper::rt::Stream;
 use hyper::server::conn::AddrStream;
 use hyper::service::{service_fn, make_service_fn};
 use hyper::{Body, Request, Response, Server};
+use hyper::{Method, Uri};
 use rand::seq::IteratorRandom;
 use std::collections::HashMap;
 use std::env;
@@ -163,7 +166,41 @@ fn speak_proxy(
   headers.insert(HeaderName::from_static("x-voder-proxy-for"), upstream_client_ip.clone());
   headers.insert(HeaderName::from_static("x-gateway-ip"), gateway_ip);
 
-  Box::new(req.into_body().concat2().map(move |b| { // Builds a BoxedFut to return
+  let client = Client::new();
+
+  let fut = client
+    .get(Uri::from_static("http://httpbin.org/ip"))
+    .and_then(|res| {
+      println!("status: {}", res.status());
+      // Concatenate the body stream into a single buffer...
+      // This returns a new future, since we must stream body.
+      res.into_body().concat2()
+    })
+    .and_then(|body| {
+      // The body is just bytes, but let's print a string...
+      let s = ::std::str::from_utf8(&body)
+        .expect("httpbin sends utf-8 JSON")
+        .to_string();
+
+      println!("body: {}", s);
+
+      let b = Body::from(s);
+      let r = Response::new(b);
+      // and_then requires we return a new Future, and it turns
+      // out that Result is a Future that is ready immediately.
+      Ok(r)
+    })
+
+    // Map any errors that might have happened...
+    /*.map_err(|err| {
+      println!("error: {}", err);
+    })*/
+    ;
+
+
+  Box::new(fut)
+
+  /*Box::new(req.into_body().concat2().map(move |b| { // Builds a BoxedFut to return
     let request_bytes = b.as_ref();
 
     let request = serde_json::from_slice::<SpeakRequest>(request_bytes)
@@ -193,7 +230,7 @@ fn speak_proxy(
       .unwrap();
 
     hyper_reverse_proxy::call(remote_addr.ip(), &proxy_host, new_req)
-  }))
+  }))*/
 }
 
 fn main() -> AnyhowResult<()> {
