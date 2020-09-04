@@ -144,6 +144,7 @@ fn speak_proxy(
   transaction: MaybeNewRelicTransaction,
   endpoint: &'static str) -> BoxFut
 {
+  info!("speak_proxy()");
   let mut headers = req.headers().clone();
 
   // This is the IP of the Digital Ocean load balancer.
@@ -170,15 +171,22 @@ fn speak_proxy(
   let client = Client::new();
 
   let fut = client
-    //.get(Uri::from_static("http://httpbin.org/ip"))
-    .get(Uri::from_static("http://asdfahsfahshfajshdfasf.com/ip"))
-    .and_then(|res| {
-      info!("status: {}", res.status());
-      // Concatenate the body stream into a single buffer...
-      // This returns a new future, since we must stream body.
-      res.into_body().concat2()
+    //.get(Uri::from_cstatic("http://httpbin.org/ip"))
+    .get(Uri::from_static("http://brand.io/404notexit"))
+    .then(|res| {
+      let body = res.into_body();
+      let status_code = res.status();
+
+      let inner = body.concat2();
+      if status_code.is_success() {
+        // Concatenate the body stream into a single buffer...
+        // This returns a new future, since we must stream body.
+        future::err(inner)
+      } else {
+        future::ok(inner)
+      }
     })
-    .and_then(|body| {
+    .then(|body| {
       // The body is just bytes, but let's print a string...
       let s = ::std::str::from_utf8(&body)
         .expect("httpbin sends utf-8 JSON")
@@ -192,7 +200,6 @@ fn speak_proxy(
       // out that Result is a Future that is ready immediately.
       Ok(r)
     })
-
     .or_else(|err| {
       println!("error: {}", err);
       let b = Body::from("test".to_string());
