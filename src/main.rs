@@ -7,17 +7,17 @@ pub mod speak_proxy;
 
 use anyhow::Result as AnyhowResult;
 use crate::newrelic_logger::{NewRelicLogger, MaybeNewRelicTransaction};
-use crate::speak_proxy::{speak_proxy, speak_proxy_with_retry};
+use crate::speak_proxy::handle;
 use futures::future::{self, Future};
 use hyper::Method;
 use hyper::header::HeaderValue;
 use hyper::http::header::HeaderName;
-use hyper::rt::Stream;
 use hyper::server::conn::AddrStream;
 use hyper::service::{service_fn, make_service_fn};
 use hyper::{Body, Request, Response, Server};
 use rand::seq::IteratorRandom;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::env;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -25,7 +25,8 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-type BoxFut = Box<dyn Future<Item=Response<Body>, Error=hyper::Error> + Send>;
+//type BoxFut = Box<dyn Future + Send>;
+type BoxFut = Box<dyn Future<Output=Response<Body>> + Send>;
 
 const ENV_DEFAULT_ROUTE : &'static str = "DEFAULT_ROUTE";
 const ENV_NEWRELIC_API_KEY : &'static str = "NEWRELIC_API_KEY";
@@ -88,16 +89,16 @@ fn get_env_num<T>(env_name: &str, default: T) -> AnyhowResult<T>
   }
 }
 
-fn _debug_request(req: Request<Body>) -> BoxFut {
+/*fn _debug_request(req: Request<Body>) -> BoxFut {
   let body_str = format!("{:?}", req);
   let response = Response::new(Body::from(body_str));
   Box::new(future::ok(response))
-}
+}*/
 
-fn health_check_response(_req: Request<Body>) -> BoxFut {
+/*fn health_check_response(_req: Request<Body>) -> BoxFut {
   let response = Response::new(Body::from("healthy"));
   Box::new(future::ok(response))
-}
+}*/
 
 pub struct Router {
   pub routes: HashMap<String, String>,
@@ -120,7 +121,8 @@ impl Router {
   }
 }
 
-fn main() -> AnyhowResult<()> {
+#[tokio::main]
+async fn main() {
   if env::var(ENV_RUST_LOG)
     .as_ref()
     .ok()
@@ -134,7 +136,8 @@ fn main() -> AnyhowResult<()> {
   env_logger::init();
 
   let default_route = get_env_string(ENV_DEFAULT_ROUTE, DEFAULT_DEFAULT_ROUTE);
-  let service_port = get_env_num::<u16>(ENV_SERVICE_PORT, DEFAULT_SERVICE_PORT)?;
+  let service_port = get_env_num::<u16>(ENV_SERVICE_PORT, DEFAULT_SERVICE_PORT)
+    .expect("should have env var");
   let newrelic_api_key = get_env_string(ENV_NEWRELIC_API_KEY, DEFAULT_NEWRELIC_API_KEY);
 
   info!("Default route: {}", default_route);
@@ -142,7 +145,8 @@ fn main() -> AnyhowResult<()> {
   let proxy_configs_file = get_env_string(ENV_PROXY_CONFIG_FILE, DEFAULT_PROXY_CONFIG_FILE);
   info!("Proxy config file: {}", proxy_configs_file);
 
-  let proxy_configs = ProxyConfigs::load_from_file(&proxy_configs_file)?;
+  let proxy_configs = ProxyConfigs::load_from_file(&proxy_configs_file)
+    .expect("should have configs");
   info!("Proxy configs: {:?}", proxy_configs);
 
   let mut route_map = HashMap::new();
@@ -165,7 +169,7 @@ fn main() -> AnyhowResult<()> {
 
   let newrelic_logger = Arc::new(newrelic_logger);
 
-  let make_service = make_service_fn(move |socket: &AddrStream| {
+  /*let make_service = make_service_fn(move |socket: &AddrStream| {
     let remote_addr = socket.remote_addr();
     info!("Got a request from: {:?}", remote_addr);
 
@@ -177,18 +181,18 @@ fn main() -> AnyhowResult<()> {
       let newrelic_logger3 = newrelic_logger2.clone();
 
       match (req.method(), req.uri().path()) {
-        (&Method::POST, "/speak") => {
+        /*(&Method::POST, "/speak") => {
           let nr_transaction = newrelic_logger3.web_transaction("/speak");
-          speak_proxy_with_retry(req, remote_addr.clone(), router3, nr_transaction, "/speak")
+          speak_proxy(req, remote_addr.clone(), router3, nr_transaction, "/speak")
         },
         (&Method::POST, "/speak_spectrogram") => {
           let nr_transaction = newrelic_logger3.web_transaction("/speak_spectrogram");
           speak_proxy(req, remote_addr.clone(), router3, nr_transaction, "/speak_spectrogram")
-        },
-        (&Method::GET, "/proxy_health") => {
+        },*/
+        /*(&Method::GET, "/proxy_health") => {
           let _droppable_transaction = newrelic_logger3.web_transaction("/proxy_health");
           health_check_response(req)
-        },
+        },*/
         _ => {
           let _droppable_transaction = newrelic_logger3.web_transaction("unmatched endpoint");
           let forward = router3.get_random_host();
@@ -197,17 +201,24 @@ fn main() -> AnyhowResult<()> {
         }
       }
     })
+  });*/
+
+  let make_service = make_service_fn(|conn: &AddrStream| {
+    let remote_addr = conn.remote_addr().ip();
+    async move {
+      Ok::<_, Infallible>(service_fn(move |req| handle(remote_addr, req)))
+    }
   });
 
   let addr = ([0, 0, 0, 0], service_port).into();
 
   info!("Running server on {:?}", addr);
 
-  let server = Server::bind(&addr)
-    .serve(make_service)
-    .map_err(|e| eprintln!("server error: {}", e));
+  let server = Server::bind(&addr).serve(make_service);
 
-  hyper::rt::run(server);
+  if let Err(e) = server.await {
+    eprintln!("server error: {}", e);
+  }
 
-  Ok(())
+  ()
 }

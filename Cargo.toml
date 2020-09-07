@@ -15,13 +15,14 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.31"
 env_logger = "0.7.1"
-futures = "0.1"
-hyper = "0.12"
-hyper-reverse-proxy = "0.4"
+futures = "0.3"
+hyper = "0.13"
+hyper-reverse-proxy = { git = "https://github.com/felipenoris/hyper-reverse-proxy.git", commit = "d109fcbd629c62eeb5c34bec1074d737e7b58529" }
 log = "0.4.8"
 newrelic = "0.2.2"
 rand = "0.7.3"
 serde = "1.0.104"
 serde_derive = "1.0.104"
 serde_json = "1.0.55"
+tokio = { version = "0.2", features = ["full"] }
 toml = "0.5.6"

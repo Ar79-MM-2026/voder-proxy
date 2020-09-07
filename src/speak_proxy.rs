@@ -2,10 +2,9 @@ use anyhow::Result as AnyhowResult;
 use crate::{BoxFut, Router};
 use crate::newrelic_logger::{NewRelicLogger, MaybeNewRelicTransaction};
 use futures::future::{self, Future};
-use hyper::Method;
+use hyper::{Method, StatusCode};
 use hyper::header::HeaderValue;
 use hyper::http::header::HeaderName;
-use hyper::rt::Stream;
 use hyper::server::conn::AddrStream;
 use hyper::service::{service_fn, make_service_fn};
 use hyper::{Body, Request, Response, Server};
@@ -14,10 +13,10 @@ use std::collections::HashMap;
 use std::env;
 use std::fmt::Debug;
 use std::fmt::Display;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use futures::IntoFuture;
+use std::convert::Infallible;
 
 /// NB: This much match the shape of SpeakRequest in the 'voder/tts_service' code.
 /// This is used for both /speak and /speak_spectrogram requests.
@@ -34,7 +33,15 @@ struct RequestDetails {
   pub speaker: String,
 }
 
-pub fn speak_proxy_with_retry(
+/*pub fn copy_request(request: &Request<Body>) -> Request<Body> {
+  let body = hyper::body::to_bytes(request.body());
+  Request::builder()
+    .uri(request.uri())
+    .method(request.method())
+    .unwrap()
+}*/
+
+/*pub fn speak_proxy_with_retry(
   req: Request<Body>,
   remote_addr: SocketAddr,
   router: Arc<Router>,
@@ -49,9 +56,9 @@ pub fn speak_proxy_with_retry(
       }
     })
     .boxed()
-}
+}*/
 
-pub fn speak_proxy(
+/*pub fn speak_proxy(
   req: Request<Body>,
   remote_addr: SocketAddr,
   router: Arc<Router>,
@@ -112,4 +119,34 @@ pub fn speak_proxy(
 
     hyper_reverse_proxy::call(remote_addr.ip(), &proxy_host, new_req)
   }))
+}*/
+
+
+fn debug_request(req: Request<Body>) -> Result<Response<Body>, Infallible>  {
+  let body_str = format!("{:?}", req);
+  Ok(Response::new(Body::from(body_str)))
+}
+
+pub async fn handle(client_ip: IpAddr, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+  if req.uri().path().starts_with("/target/first") {
+  // will forward requests to port 13901
+  match hyper_reverse_proxy::call(client_ip, "http://127.0.0.1:13901", req).await {
+    Ok(response) => {Ok(response)}
+    Err(error) => {Ok(Response::builder()
+      .status(StatusCode::INTERNAL_SERVER_ERROR)
+      .body(Body::empty())
+      .unwrap())}
+    }
+  } else if req.uri().path().starts_with("/target/second") {
+    // will forward requests to port 13902
+    match hyper_reverse_proxy::call(client_ip, "http://127.0.0.1:13902", req).await {
+      Ok(response) => {Ok(response)}
+      Err(error) => {Ok(Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .body(Body::empty())
+        .unwrap())}
+    }
+  } else {
+    debug_request(req)
+  }
 }
