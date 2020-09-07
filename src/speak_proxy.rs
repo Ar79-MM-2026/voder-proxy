@@ -17,6 +17,7 @@ use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::convert::Infallible;
+use hyper_reverse_proxy::ProxyError;
 
 /// NB: This much match the shape of SpeakRequest in the 'voder/tts_service' code.
 /// This is used for both /speak and /speak_spectrogram requests.
@@ -58,12 +59,12 @@ struct RequestDetails {
     .boxed()
 }*/
 
-/*pub fn speak_proxy(
-  req: Request<Body>,
+pub async fn speak_proxy(
   remote_addr: SocketAddr,
+  req: Request<Vec<u8>>,
   router: Arc<Router>,
   transaction: MaybeNewRelicTransaction,
-  endpoint: &'static str) -> BoxFut
+  endpoint: &'static str) -> Box<Future<Output=Result<Response<Body>, ProxyError>>>
 {
   let mut headers = req.headers().clone();
 
@@ -88,37 +89,40 @@ struct RequestDetails {
   headers.insert(HeaderName::from_static("x-voder-proxy-for"), upstream_client_ip.clone());
   headers.insert(HeaderName::from_static("x-gateway-ip"), gateway_ip);
 
-  Box::new(req.into_body().concat2().map(move |b| { // Builds a BoxedFut to return
-    let request_bytes = b.as_ref();
+  let request_bytes = req.body();
 
-    let request = serde_json::from_slice::<SpeakRequest>(request_bytes)
-      .unwrap();
+  let request = serde_json::from_slice::<SpeakRequest>(request_bytes)
+    .unwrap();
 
-    RequestDetails {
-      request_bytes: request_bytes.to_vec(),
-      speaker: request.speaker,
-    }
-  }).and_then(move |request_details: RequestDetails| {
-    let proxy_host = router.get_speaker_host(&request_details.speaker);
+  let request_details = RequestDetails {
+    request_bytes: request_bytes.clone(),
+    speaker: request.speaker,
+  };
 
-    info!("Routing {} for {} to {}", endpoint, &request_details.speaker, &proxy_host);
+  let proxy_host = router.get_speaker_host(&request_details.speaker);
 
-    transaction.add_attribute("speaker", &request_details.speaker);
+  info!("Routing {} for {} to {}", endpoint, &request_details.speaker, &proxy_host);
 
-    let mut request_builder = Request::builder();
-    request_builder.method(Method::POST)
-      .uri(endpoint);
+  transaction.add_attribute("speaker", &request_details.speaker);
 
-    for (k, v) in headers.iter() {
-      request_builder.header(k, v);
-    }
+  let mut request_builder = Request::builder()
+    .method(Method::POST)
+    .uri(endpoint);
 
-    let new_req = request_builder
-      .body(Body::from(request_details.request_bytes))
-      .unwrap();
+  for (k, v) in headers.iter() {
+    // NB: Handling move because of builder class
+    request_builder = request_builder.header(k, v);
+  }
 
-    hyper_reverse_proxy::call(remote_addr.ip(), &proxy_host, new_req)
-  }))
-}*/
+  let new_req = request_builder
+    .body(Body::from(request_details.request_bytes))
+    .unwrap();
+
+  //Box::new(future::ok(Vec::new()))
+  match hyper_reverse_proxy::call(remote_addr.ip(), &proxy_host, new_req).await {
+    Ok(result) => Box::new(future::ok(result)),
+    Err(result) => Box::new(future::err(result)),
+  }
+}
 
 

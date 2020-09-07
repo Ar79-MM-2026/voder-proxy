@@ -142,7 +142,8 @@ pub async fn handle(
       debug_request(req)
     },
     _ => {
-      let _droppable_transaction = newrelic_logger.web_transaction("unmatched endpoint");
+      let _droppable_transaction = newrelic_logger
+        .web_transaction("unmatched endpoint");
       let forward = router.get_random_host();
 
       info!("Forwarding to `{}` random host: {}", &forward, req.uri());
