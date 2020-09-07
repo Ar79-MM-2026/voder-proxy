@@ -7,9 +7,8 @@ pub mod speak_proxy;
 
 use anyhow::Result as AnyhowResult;
 use crate::newrelic_logger::{NewRelicLogger, MaybeNewRelicTransaction};
-use crate::speak_proxy::handle;
 use futures::future::{self, Future};
-use hyper::Method;
+use hyper::{Method, StatusCode};
 use hyper::header::HeaderValue;
 use hyper::http::header::HeaderName;
 use hyper::server::conn::AddrStream;
@@ -21,7 +20,7 @@ use std::convert::Infallible;
 use std::env;
 use std::fmt::Debug;
 use std::fmt::Display;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -121,6 +120,66 @@ impl Router {
   }
 }
 
+fn debug_request(req: Request<Body>) -> Result<Response<Body>, Infallible>  {
+  let body_str = format!("{:?}", req);
+  Ok(Response::new(Body::from(body_str)))
+}
+
+pub async fn handle(
+  client_ip: IpAddr,
+  req: Request<Body>,
+  router: Arc<Router>,
+  newrelic_logger: Arc<NewRelicLogger>) -> Result<Response<Body>, Infallible>
+{
+  match req.uri().path() {
+    "/speak" => {
+      debug_request(req)
+    },
+    "/speak_spectrogram" => {
+      debug_request(req)
+    },
+    "/proxy_health" => {
+      debug_request(req)
+    },
+    _ => {
+      let _droppable_transaction = newrelic_logger.web_transaction("unmatched endpoint");
+      let forward = router.get_random_host();
+
+      info!("Forwarding to `{}` random host: {}", &forward, req.uri());
+
+      match hyper_reverse_proxy::call(client_ip, &forward, req).await {
+        Ok(response) => {Ok(response)}
+        Err(error) => {Ok(Response::builder()
+          .status(StatusCode::INTERNAL_SERVER_ERROR)
+          .body(Body::empty())
+          .unwrap())}
+      }
+    },
+  }
+
+  /*if req.uri().path().starts_with("/target/first") {
+    // will forward requests to port 13901
+    match hyper_reverse_proxy::call(client_ip, "http://127.0.0.1:13901", req).await {
+      Ok(response) => {Ok(response)}
+      Err(error) => {Ok(Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .body(Body::empty())
+        .unwrap())}
+    }
+  } else if req.uri().path().starts_with("/target/second") {
+    // will forward requests to port 13902
+    match hyper_reverse_proxy::call(client_ip, "http://127.0.0.1:13902", req).await {
+      Ok(response) => {Ok(response)}
+      Err(error) => {Ok(Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .body(Body::empty())
+        .unwrap())}
+    }
+  } else {
+    debug_request(req)
+  }*/
+}
+
 #[tokio::main]
 async fn main() {
   if env::var(ENV_RUST_LOG)
@@ -203,10 +262,20 @@ async fn main() {
     })
   });*/
 
-  let make_service = make_service_fn(|conn: &AddrStream| {
+  let make_service = make_service_fn(move |conn: &AddrStream| {
     let remote_addr = conn.remote_addr().ip();
+    let router2 = router.clone();
+    let newrelic_logger2 = newrelic_logger.clone();
+
     async move {
-      Ok::<_, Infallible>(service_fn(move |req| handle(remote_addr, req)))
+      let router3 = router2.clone();
+      let newrelic_logger3 = newrelic_logger2.clone();
+
+      Ok::<_, Infallible>(service_fn(move |req| {
+        let router4 = router3.clone();
+        let newrelic_logger4 = newrelic_logger3.clone();
+        handle(remote_addr, req, router4, newrelic_logger4)
+      }))
     }
   });
 
