@@ -8,6 +8,7 @@ pub mod speak_proxy;
 use anyhow::Result as AnyhowResult;
 use crate::newrelic_logger::{NewRelicLogger, MaybeNewRelicTransaction};
 use futures::future::{self, Future};
+use crate::speak_proxy::speak_proxy;
 use hyper::{Method, StatusCode};
 use hyper::header::HeaderValue;
 use hyper::http::header::HeaderName;
@@ -133,10 +134,34 @@ pub async fn handle(
 {
   match req.uri().path() {
     "/speak" => {
-      debug_request(req)
+      let nr_transaction = newrelic_logger.web_transaction("/speak");
+      let result = speak_proxy(client_ip, req, router, nr_transaction, "/speak").await;
+      match result {
+        Ok(response) => {
+          Ok(response)
+        },
+        Err(_error) => {
+          Ok(Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::empty())
+            .unwrap())
+        }
+      }
     },
     "/speak_spectrogram" => {
-      debug_request(req)
+      let nr_transaction = newrelic_logger.web_transaction("/speak_spectrogram");
+      let result = speak_proxy(client_ip, req, router, nr_transaction, "/speak_spectrogram").await;
+      match result {
+        Ok(response) => {
+          Ok(response)
+        },
+        Err(_error) => {
+          Ok(Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::empty())
+            .unwrap())
+        }
+      }
     },
     "/proxy_health" => {
       debug_request(req)
@@ -149,11 +174,15 @@ pub async fn handle(
       info!("Forwarding to `{}` random host: {}", &forward, req.uri());
 
       match hyper_reverse_proxy::call(client_ip, &forward, req).await {
-        Ok(response) => {Ok(response)}
-        Err(error) => {Ok(Response::builder()
-          .status(StatusCode::INTERNAL_SERVER_ERROR)
-          .body(Body::empty())
-          .unwrap())}
+        Ok(response) => {
+          Ok(response)
+        },
+        Err(error) => {
+          Ok(Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::empty())
+            .unwrap())
+        }
       }
     },
   }

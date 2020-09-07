@@ -18,6 +18,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::convert::Infallible;
 use hyper_reverse_proxy::ProxyError;
+use futures::TryStreamExt;
 
 /// NB: This much match the shape of SpeakRequest in the 'voder/tts_service' code.
 /// This is used for both /speak and /speak_spectrogram requests.
@@ -59,17 +60,22 @@ struct RequestDetails {
     .boxed()
 }*/
 
+#[derive(Serialize, Debug)]
+pub struct ResponseError {
+  pub reason: String,
+}
+
 pub async fn speak_proxy(
-  remote_addr: SocketAddr,
-  req: Request<Vec<u8>>,
+  ip_addr: IpAddr,
+  req: Request<Body>,
   router: Arc<Router>,
   transaction: MaybeNewRelicTransaction,
-  endpoint: &'static str) -> Box<Future<Output=Result<Response<Body>, ProxyError>>>
+  endpoint: &'static str) -> Result<Response<Body>, ResponseError>
 {
   let mut headers = req.headers().clone();
 
   // This is the IP of the Digital Ocean load balancer.
-  let gateway_ip = HeaderValue::from_str(&remote_addr.ip().to_string())
+  let gateway_ip = HeaderValue::from_str(&ip_addr.to_string())
     .ok()
     .unwrap_or(HeaderValue::from_static(""));
 
@@ -89,9 +95,17 @@ pub async fn speak_proxy(
   headers.insert(HeaderName::from_static("x-voder-proxy-for"), upstream_client_ip.clone());
   headers.insert(HeaderName::from_static("x-gateway-ip"), gateway_ip);
 
-  let request_bytes = req.body();
+  let (parts, body) = req.into_parts();
 
-  let request = serde_json::from_slice::<SpeakRequest>(request_bytes)
+  let request_bytes = body
+    .try_fold(Vec::new(), |mut data, chunk| async move {
+      data.extend_from_slice(&chunk);
+      Ok(data)
+    })
+    .await
+    .unwrap();
+
+  let request = serde_json::from_slice::<SpeakRequest>(&request_bytes)
     .unwrap();
 
   let request_details = RequestDetails {
@@ -119,9 +133,11 @@ pub async fn speak_proxy(
     .unwrap();
 
   //Box::new(future::ok(Vec::new()))
-  match hyper_reverse_proxy::call(remote_addr.ip(), &proxy_host, new_req).await {
-    Ok(result) => Box::new(future::ok(result)),
-    Err(result) => Box::new(future::err(result)),
+  match hyper_reverse_proxy::call(ip_addr, &proxy_host, new_req).await {
+    Ok(result) => Ok(result),
+    Err(_result) => Err(ResponseError {
+      reason: "Uknown failure".to_string()
+    }),
   }
 }
 
