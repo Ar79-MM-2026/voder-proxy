@@ -35,26 +35,25 @@ struct RequestDetails {
   pub speaker: String,
 }
 
-pub fn copy_request(request: &Request<Body>) -> Request<Body> {
-  let mut cloned = Request::builder()
-    .body(Body::from(""))
+/*pub fn copy_request(request: &Request<Body>) -> Request<Body> {
+  /*let body_bytes = hyper::body::to_bytes(request.body());
+  println!("Body Bytes: {:?}", body_bytes);
+
+  let body = Body::from("");*/
+  let body_bytes = hyper::body::to_bytes(request.body())
     .unwrap();
 
-  request.clone_into(&mut &cloned);
+  let body_string = String::from_utf8_lossy(&body_bytes);
 
+  let data = request.body().data();
 
-  /*let body_bytes = hyper::body::to_bytes(request.body());
-  let body = Body::from(body_bytes);
-  Body::from(request.body());
 
   Request::builder()
     .uri(request.uri())
     .method(request.method())
-    .body(body)
-    .unwrap()*/
-
-  cloned
-}
+    .body(Body::from(""))
+    .unwrap()
+}*/
 
 pub async fn speak_proxy_with_retry(
   ip_addr: IpAddr,
@@ -63,12 +62,35 @@ pub async fn speak_proxy_with_retry(
   _transaction: MaybeNewRelicTransaction,
   endpoint: &'static str) -> Result<Response<Body>, ResponseError>
 {
-  let mut attempt = 0;
+  let mut attempt : u8 = 0;
+
+  let headers = req.headers().clone();
+
+  let (_, body) = req.into_parts();
+
+  let body_bytes = hyper::body::to_bytes(body)
+    .await
+    .unwrap();
+
+  let body_string = String::from_utf8(body_bytes.as_ref().to_vec())
+    .unwrap();
+
+  println!("Body: {:?}", body_string);
 
   loop {
     info!("Attempt #{}", attempt);
 
-    let request = copy_request(&req);
+    let mut request_builder = Request::builder();
+
+    for (k, v) in headers.iter() {
+      // NB: Builder pattern ownership
+      request_builder = request_builder.header(k.clone(), v.clone());
+    }
+
+    let request = request_builder
+      .body(Body::from(body_string.clone()))
+      .unwrap();
+
     let transaction = MaybeNewRelicTransaction::from_optional(None);
     let result = speak_proxy(ip_addr, request, router.clone(), transaction, endpoint).await;
 
@@ -119,7 +141,7 @@ pub async fn speak_proxy(
   headers.insert(HeaderName::from_static("x-voder-proxy-for"), upstream_client_ip.clone());
   headers.insert(HeaderName::from_static("x-gateway-ip"), gateway_ip);
 
-  let (parts, body) = req.into_parts();
+  let (_parts, body) = req.into_parts();
 
   let request_bytes = body
     .try_fold(Vec::new(), |mut data, chunk| async move {
@@ -129,6 +151,7 @@ pub async fn speak_proxy(
     .await
     .unwrap();
 
+  println!("Requeest bytes: {:?}", request_bytes);
   let request = serde_json::from_slice::<SpeakRequest>(&request_bytes)
     .unwrap();
 
