@@ -35,30 +35,54 @@ struct RequestDetails {
   pub speaker: String,
 }
 
-/*pub fn copy_request(request: &Request<Body>) -> Request<Body> {
-  let body = hyper::body::to_bytes(request.body());
+pub fn copy_request(request: &Request<Body>) -> Request<Body> {
+  let mut cloned = Request::builder()
+    .body(Body::from(""))
+    .unwrap();
+
+  request.clone_into(&mut &cloned);
+
+
+  /*let body_bytes = hyper::body::to_bytes(request.body());
+  let body = Body::from(body_bytes);
+  Body::from(request.body());
+
   Request::builder()
     .uri(request.uri())
     .method(request.method())
-    .unwrap()
-}*/
+    .body(body)
+    .unwrap()*/
 
-/*pub fn speak_proxy_with_retry(
+  cloned
+}
+
+pub async fn speak_proxy_with_retry(
+  ip_addr: IpAddr,
   req: Request<Body>,
-  remote_addr: SocketAddr,
   router: Arc<Router>,
-  transaction: MaybeNewRelicTransaction,
-  endpoint: &'static str) -> BoxFut
+  _transaction: MaybeNewRelicTransaction,
+  endpoint: &'static str) -> Result<Response<Body>, ResponseError>
 {
-  speak_proxy(req, remote_addr, router, transaction, endpoint)
-    .then(|result| {
-      match result {
-        Ok(t) => future::ok(t),
-        Err(t) => future::err(t),
-      }
-    })
-    .boxed()
-}*/
+  let mut attempt = 0;
+
+  loop {
+    info!("Attempt #{}", attempt);
+
+    let request = copy_request(&req);
+    let transaction = MaybeNewRelicTransaction::from_optional(None);
+    let result = speak_proxy(ip_addr, request, router.clone(), transaction, endpoint).await;
+
+    if result.is_ok() {
+      return result;
+    }
+
+    attempt += 1;
+
+    if attempt > 3 {
+      return Err(ResponseError { reason: "max attempts reached".to_string() });
+    }
+  }
+}
 
 #[derive(Serialize, Debug)]
 pub struct ResponseError {

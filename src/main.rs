@@ -1,3 +1,5 @@
+#![feature(toowned_clone_into)]
+
 #[macro_use] extern crate anyhow;
 #[macro_use] extern crate log;
 #[macro_use] extern crate serde_derive;
@@ -8,7 +10,7 @@ pub mod speak_proxy;
 use anyhow::Result as AnyhowResult;
 use crate::newrelic_logger::{NewRelicLogger, MaybeNewRelicTransaction};
 use futures::future::{self, Future};
-use crate::speak_proxy::speak_proxy;
+use crate::speak_proxy::{speak_proxy, speak_proxy_with_retry};
 use hyper::{Method, StatusCode};
 use hyper::header::HeaderValue;
 use hyper::http::header::HeaderName;
@@ -135,7 +137,7 @@ pub async fn handle(
   match req.uri().path() {
     "/speak" => {
       let nr_transaction = newrelic_logger.web_transaction("/speak");
-      let result = speak_proxy(client_ip, req, router, nr_transaction, "/speak").await;
+      let result = speak_proxy_with_retry(client_ip, req, router, nr_transaction, "/speak").await;
       match result {
         Ok(response) => {
           Ok(response)
@@ -150,7 +152,7 @@ pub async fn handle(
     },
     "/speak_spectrogram" => {
       let nr_transaction = newrelic_logger.web_transaction("/speak_spectrogram");
-      let result = speak_proxy(client_ip, req, router, nr_transaction, "/speak_spectrogram").await;
+      let result = speak_proxy_with_retry(client_ip, req, router, nr_transaction, "/speak_spectrogram").await;
       match result {
         Ok(response) => {
           Ok(response)
