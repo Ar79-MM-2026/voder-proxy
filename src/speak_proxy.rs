@@ -1,24 +1,24 @@
 use anyhow::Result as AnyhowResult;
-use crate::{BoxFut, Router};
 use crate::newrelic_logger::{NewRelicLogger, MaybeNewRelicTransaction};
+use crate::{BoxFut, Router};
+use futures::TryStreamExt;
 use futures::future::{self, Future};
-use hyper::{Method, StatusCode};
 use hyper::header::HeaderValue;
 use hyper::http::header::HeaderName;
 use hyper::server::conn::AddrStream;
 use hyper::service::{service_fn, make_service_fn};
 use hyper::{Body, Request, Response, Server};
+use hyper::{Method, StatusCode};
+use hyper_reverse_proxy::ProxyError;
 use rand::seq::IteratorRandom;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::env;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::convert::Infallible;
-use hyper_reverse_proxy::ProxyError;
-use futures::TryStreamExt;
 
 /// NB: This much match the shape of SpeakRequest in the 'voder/tts_service' code.
 /// This is used for both /speak and /speak_spectrogram requests.
@@ -35,26 +35,6 @@ struct RequestDetails {
   pub speaker: String,
 }
 
-/*pub fn copy_request(request: &Request<Body>) -> Request<Body> {
-  /*let body_bytes = hyper::body::to_bytes(request.body());
-  println!("Body Bytes: {:?}", body_bytes);
-
-  let body = Body::from("");*/
-  let body_bytes = hyper::body::to_bytes(request.body())
-    .unwrap();
-
-  let body_string = String::from_utf8_lossy(&body_bytes);
-
-  let data = request.body().data();
-
-
-  Request::builder()
-    .uri(request.uri())
-    .method(request.method())
-    .body(Body::from(""))
-    .unwrap()
-}*/
-
 pub async fn speak_proxy_with_retry(
   ip_addr: IpAddr,
   req: Request<Body>,
@@ -66,13 +46,11 @@ pub async fn speak_proxy_with_retry(
 
   let headers = req.headers().clone();
 
-  let (_, body) = req.into_parts();
+  let (_parts, body) = req.into_parts();
 
-  let body_bytes = hyper::body::to_bytes(body)
-    .await
-    .unwrap();
+  let body_bytes = body_to_bytes(body).await.unwrap();
 
-  let body_string = String::from_utf8(body_bytes.as_ref().to_vec())
+  let body_string = String::from_utf8(body_bytes)
     .unwrap();
 
   println!("Body: {:?}", body_string);
@@ -143,15 +121,8 @@ pub async fn speak_proxy(
 
   let (_parts, body) = req.into_parts();
 
-  let request_bytes = body
-    .try_fold(Vec::new(), |mut data, chunk| async move {
-      data.extend_from_slice(&chunk);
-      Ok(data)
-    })
-    .await
-    .unwrap();
+  let request_bytes = body_to_bytes(body).await.unwrap();
 
-  println!("Requeest bytes: {:?}", request_bytes);
   let request = serde_json::from_slice::<SpeakRequest>(&request_bytes)
     .unwrap();
 
@@ -188,4 +159,13 @@ pub async fn speak_proxy(
   }
 }
 
+async fn body_to_bytes(body: Body) -> AnyhowResult<Vec<u8>> {
+  // Also: let body_bytes = hyper::body::to_bytes(body)
+  let bytes = body.try_fold(Vec::new(), |mut data, chunk| async move {
+      data.extend_from_slice(&chunk);
+      Ok(data)
+    })
+    .await?;
 
+  Ok(bytes)
+}

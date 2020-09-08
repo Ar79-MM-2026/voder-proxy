@@ -166,6 +166,8 @@ pub async fn handle(
       }
     },
     "/proxy_health" => {
+      let _droppable_transaction = newrelic_logger.web_transaction("/proxy_health");
+      //health_check_response(req)
       debug_request(req)
     },
     _ => {
@@ -188,28 +190,6 @@ pub async fn handle(
       }
     },
   }
-
-  /*if req.uri().path().starts_with("/target/first") {
-    // will forward requests to port 13901
-    match hyper_reverse_proxy::call(client_ip, "http://127.0.0.1:13901", req).await {
-      Ok(response) => {Ok(response)}
-      Err(error) => {Ok(Response::builder()
-        .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .body(Body::empty())
-        .unwrap())}
-    }
-  } else if req.uri().path().starts_with("/target/second") {
-    // will forward requests to port 13902
-    match hyper_reverse_proxy::call(client_ip, "http://127.0.0.1:13902", req).await {
-      Ok(response) => {Ok(response)}
-      Err(error) => {Ok(Response::builder()
-        .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .body(Body::empty())
-        .unwrap())}
-    }
-  } else {
-    debug_request(req)
-  }*/
 }
 
 #[tokio::main]
@@ -320,6 +300,4 @@ async fn main() {
   if let Err(e) = server.await {
     eprintln!("server error: {}", e);
   }
-
-  ()
 }
