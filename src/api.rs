@@ -1,7 +1,8 @@
 use anyhow::Result as AnyhowResult;
 use futures::TryStreamExt;
 use hyper::http::HeaderValue;
-use hyper::{Body, Request, HeaderMap};
+use hyper::{Body, Request, HeaderMap, Response, StatusCode};
+use hyper::body::Bytes;
 
 /// NB: This much match the shape of SpeakRequest in the 'voder/tts_service' code.
 /// This is used for both /speak and /speak_spectrogram requests.
@@ -37,6 +38,21 @@ pub struct InternalSpeakRequest {
   pub skip_rate_limiter: bool,
 }
 
+pub enum ErrorType {
+  /// The proxy couldn't find a healthy host (or it died mid-connection)
+  ProxyError,
+  // The backend server reported a 500
+  ServerError,
+  /// Client is rate limited
+  RateLimitError,
+}
+
+pub struct ErrorResponse {
+  /// The type of error
+  pub error_type: ErrorType,
+  /// Description of the error
+  pub error_description: String,
+}
 
 impl ExternalHttpRequest {
 
@@ -51,6 +67,27 @@ impl ExternalHttpRequest {
       headers: headers,
       speak_request:  speak_request,
     })
+  }
+}
+
+impl ErrorType {
+  pub fn status_code(&self) -> StatusCode {
+    match *self {
+      ErrorType::ProxyError =>StatusCode::INTERNAL_SERVER_ERROR,
+      ErrorType::ServerError => StatusCode::INTERNAL_SERVER_ERROR,
+      ErrorType::RateLimitError => StatusCode::TOO_MANY_REQUESTS,
+    }
+  }
+}
+
+impl ErrorResponse {
+  pub fn to_response(&self) -> Response<Body> {
+    let status_code = self.error_type.status_code();
+    let body = Body::from(self.error_description.clone());
+    Response::builder()
+      .status(status_code)
+      .body(body)
+      .unwrap()
   }
 }
 

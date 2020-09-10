@@ -1,6 +1,7 @@
 use anyhow::Result as AnyhowResult;
+use crate::Router;
+use crate::api::{ExternalSpeakRequest, ExternalHttpRequest, InternalSpeakRequest, ErrorResponse, ErrorType};
 use crate::newrelic_logger::{NewRelicLogger, MaybeNewRelicTransaction};
-use crate::{BoxFut, Router};
 use futures::TryStreamExt;
 use futures::future::{self, Future};
 use hyper::header::HeaderValue;
@@ -13,20 +14,20 @@ use hyper_reverse_proxy::ProxyError;
 use rand::seq::IteratorRandom;
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::env;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use crate::request::{ExternalSpeakRequest, ExternalHttpRequest, InternalSpeakRequest};
+use std::time::Duration;
+use std::{env, thread};
 
 pub async fn speak_proxy_with_retry(
   ip_addr: IpAddr,
   request: Request<Body>,
   router: Arc<Router>,
   _transaction: MaybeNewRelicTransaction,
-  endpoint: &'static str) -> Result<Response<Body>, ResponseError>
+  endpoint: &'static str) -> Result<Response<Body>, ErrorResponse>
 {
   let mut attempt : u8 = 0;
 
@@ -79,14 +80,20 @@ pub async fn speak_proxy_with_retry(
       &load_balancer_hostname,
       endpoint).await;
 
-    if result.is_ok() {
-      return result;
+    match result {
+      Ok(good_response) => return Ok(good_response),
+      Err(_) => {},
     }
 
     attempt += 1;
 
-    if attempt > 3 {
-      return Err(ResponseError { reason: "max attempts reached".to_string() });
+    thread::sleep(Duration::from_millis(400)); // TODO: Needs backoff + jitter
+
+    if attempt > 2 {
+      return Err(ErrorResponse {
+        error_type: ErrorType::ProxyError,
+        error_description: "max internal retry attempts reached".to_string(),
+      });
     }
   }
 }
@@ -101,9 +108,10 @@ async fn speak_proxy(
   internal_speak_request: InternalSpeakRequest,
   headers: HeaderMap<HeaderValue>,
   load_balancer_hostname: &str,
-  endpoint: &'static str) -> Result<Response<Body>, ResponseError>
+  endpoint: &'static str) -> Result<Response<Body>, ()>
 {
-  info!("Routing {} for {} to {}", endpoint, &internal_speak_request.speaker, &load_balancer_hostname);
+  info!("Routing {} for {} to {} (attempt # {})", endpoint, &internal_speak_request.speaker,
+        &load_balancer_hostname, internal_speak_request.retry_attempt_number);
 
   let mut request_builder = Request::builder()
     .method(Method::POST)
@@ -116,17 +124,12 @@ async fn speak_proxy(
 
   let json_speak_request = serde_json::to_string(&internal_speak_request).unwrap();
 
-  println!("Request: {:?}", internal_speak_request);
-
   let request = request_builder
     .body(Body::from(json_speak_request))
     .unwrap();
 
-  //Box::new(future::ok(Vec::new()))
   match hyper_reverse_proxy::call(ip_addr, &load_balancer_hostname, request).await {
     Ok(result) => Ok(result),
-    Err(_result) => Err(ResponseError {
-      reason: "Uknown failure".to_string()
-    }),
+    Err(_result) => Err(()), // TODO: Surface this?
   }
 }

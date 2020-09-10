@@ -4,20 +4,20 @@
 #[macro_use] extern crate log;
 #[macro_use] extern crate serde_derive;
 
+pub mod api;
 pub mod newrelic_logger;
-pub mod request;
 pub mod speak_proxy;
 
 use anyhow::Result as AnyhowResult;
 use crate::newrelic_logger::{NewRelicLogger, MaybeNewRelicTransaction};
-use futures::future::{self, Future};
 use crate::speak_proxy::speak_proxy_with_retry;
-use hyper::{Method, StatusCode};
+use futures::future::{self, Future};
 use hyper::header::HeaderValue;
 use hyper::http::header::HeaderName;
 use hyper::server::conn::AddrStream;
 use hyper::service::{service_fn, make_service_fn};
 use hyper::{Body, Request, Response, Server};
+use hyper::{Method, StatusCode};
 use rand::seq::IteratorRandom;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -27,9 +27,6 @@ use std::fmt::Display;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-
-//type BoxFut = Box<dyn Future + Send>;
-type BoxFut = Box<dyn Future<Output=Response<Body>> + Send>;
 
 const ENV_DEFAULT_ROUTE : &'static str = "DEFAULT_ROUTE";
 const ENV_NEWRELIC_API_KEY : &'static str = "NEWRELIC_API_KEY";
@@ -92,17 +89,6 @@ fn get_env_num<T>(env_name: &str, default: T) -> AnyhowResult<T>
   }
 }
 
-/*fn _debug_request(req: Request<Body>) -> BoxFut {
-  let body_str = format!("{:?}", req);
-  let response = Response::new(Body::from(body_str));
-  Box::new(future::ok(response))
-}*/
-
-/*fn health_check_response(_req: Request<Body>) -> BoxFut {
-  let response = Response::new(Body::from("healthy"));
-  Box::new(future::ok(response))
-}*/
-
 pub struct Router {
   pub routes: HashMap<String, String>,
   pub default_route: String,
@@ -129,6 +115,10 @@ fn debug_request(req: Request<Body>) -> Result<Response<Body>, Infallible>  {
   Ok(Response::new(Body::from(body_str)))
 }
 
+fn health_check_response(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
+  Ok(Response::new(Body::from("healthy")))
+}
+
 pub async fn handle(
   client_ip: IpAddr,
   req: Request<Body>,
@@ -140,36 +130,21 @@ pub async fn handle(
       let nr_transaction = newrelic_logger.web_transaction("/speak");
       let result = speak_proxy_with_retry(client_ip, req, router, nr_transaction, "/speak").await;
       match result {
-        Ok(response) => {
-          Ok(response)
-        },
-        Err(_error) => {
-          Ok(Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::empty())
-            .unwrap())
-        }
+        Ok(response) => Ok(response),
+        Err(error) => Ok(error.to_response()),
       }
     },
     "/speak_spectrogram" => {
       let nr_transaction = newrelic_logger.web_transaction("/speak_spectrogram");
       let result = speak_proxy_with_retry(client_ip, req, router, nr_transaction, "/speak_spectrogram").await;
       match result {
-        Ok(response) => {
-          Ok(response)
-        },
-        Err(_error) => {
-          Ok(Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::empty())
-            .unwrap())
-        }
+        Ok(response) => Ok(response),
+        Err(error) => Ok(error.to_response()),
       }
     },
     "/proxy_health" => {
       let _droppable_transaction = newrelic_logger.web_transaction("/proxy_health");
-      //health_check_response(req)
-      debug_request(req)
+      health_check_response(req)
     },
     _ => {
       let _droppable_transaction = newrelic_logger
@@ -182,10 +157,10 @@ pub async fn handle(
         Ok(response) => {
           Ok(response)
         },
-        Err(error) => {
+        Err(_) => {
           Ok(Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::empty())
+            .body(Body::from("unknown proxy error"))
             .unwrap())
         }
       }
@@ -240,40 +215,6 @@ async fn main() {
   };
 
   let newrelic_logger = Arc::new(newrelic_logger);
-
-  /*let make_service = make_service_fn(move |socket: &AddrStream| {
-    let remote_addr = socket.remote_addr();
-    info!("Got a request from: {:?}", remote_addr);
-
-    let router2 = router.clone();
-    let newrelic_logger2 = newrelic_logger.clone();
-
-    service_fn(move |req: Request<Body>| {
-      let router3 = router2.clone();
-      let newrelic_logger3 = newrelic_logger2.clone();
-
-      match (req.method(), req.uri().path()) {
-        /*(&Method::POST, "/speak") => {
-          let nr_transaction = newrelic_logger3.web_transaction("/speak");
-          speak_proxy(req, remote_addr.clone(), router3, nr_transaction, "/speak")
-        },
-        (&Method::POST, "/speak_spectrogram") => {
-          let nr_transaction = newrelic_logger3.web_transaction("/speak_spectrogram");
-          speak_proxy(req, remote_addr.clone(), router3, nr_transaction, "/speak_spectrogram")
-        },*/
-        /*(&Method::GET, "/proxy_health") => {
-          let _droppable_transaction = newrelic_logger3.web_transaction("/proxy_health");
-          health_check_response(req)
-        },*/
-        _ => {
-          let _droppable_transaction = newrelic_logger3.web_transaction("unmatched endpoint");
-          let forward = router3.get_random_host();
-          info!("Forwarding to `{}` random host: {}", &forward, req.uri());
-          hyper_reverse_proxy::call(remote_addr.ip(), &forward, req)
-        }
-      }
-    })
-  });*/
 
   let make_service = make_service_fn(move |conn: &AddrStream| {
     let remote_addr = conn.remote_addr().ip();
