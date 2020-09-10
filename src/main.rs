@@ -5,12 +5,13 @@
 #[macro_use] extern crate serde_derive;
 
 pub mod newrelic_logger;
+pub mod request;
 pub mod speak_proxy;
 
 use anyhow::Result as AnyhowResult;
 use crate::newrelic_logger::{NewRelicLogger, MaybeNewRelicTransaction};
 use futures::future::{self, Future};
-use crate::speak_proxy::{speak_proxy, speak_proxy_with_retry};
+use crate::speak_proxy::speak_proxy_with_retry;
 use hyper::{Method, StatusCode};
 use hyper::header::HeaderValue;
 use hyper::http::header::HeaderName;
