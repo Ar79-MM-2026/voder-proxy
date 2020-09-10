@@ -56,6 +56,10 @@ pub async fn speak_proxy_with_retry(
   headers_to_proxy.insert(HeaderName::from_static("x-voder-proxy-for"), upstream_client_ip.clone());
   headers_to_proxy.insert(HeaderName::from_static("x-gateway-ip"), gateway_ip);
 
+  // We're going to be changing the request body length, so remove the reported value
+  // so Hyper doesn't choke on any mismatch.
+  headers_to_proxy.remove(HeaderName::from_static("content-length"));
+
   // The proxy host is a Kubernetes load balancer. We're not doing the round robin magic here,
   // so it makes sense to reuse the same value for each retry.
   let load_balancer_hostname = router.get_speaker_host(&external_http_request.speak_request.speaker);
@@ -111,6 +115,8 @@ async fn speak_proxy(
   }
 
   let json_speak_request = serde_json::to_string(&internal_speak_request).unwrap();
+
+  println!("Request: {:?}", internal_speak_request);
 
   let request = request_builder
     .body(Body::from(json_speak_request))
